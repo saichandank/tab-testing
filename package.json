@@ -175,8 +175,8 @@
     "webpack-merge": "^6.0.1"
   },
   "build": {
-    "productName": "ElectronReact",
-    "appId": "org.erb.ElectronReact",
+    "productName": "Tabsy",
+    "appId": "com.yourdomain.tabsy",
     "asar": true,
     "asarUnpack": "**\\*.{node,dll}",
     "files": [
@@ -184,8 +184,12 @@
       "node_modules",
       "package.json"
     ],
+    "afterSign": ".erb/scripts/notarize.js",
     "mac": {
-      "sign": ".erb/scripts/notarize.js",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
       "notarize": false,
       "target": {
         "target": "default",
@@ -194,11 +198,7 @@
           "x64"
         ]
       },
-      "type": "distribution",
-      "hardenedRuntime": true,
-      "entitlements": "assets/entitlements.mac.plist",
-      "entitlementsInherit": "assets/entitlements.mac.plist",
-      "gatekeeperAssess": false
+      "type": "distribution"
     },
     "dmg": {
       "contents": [

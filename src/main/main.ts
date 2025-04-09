@@ -9,8 +9,8 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
-import { app, BrowserWindow, shell, ipcMain } from 'electron';
-import {spawn} from 'child_process'; // need to communicate with
+import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
+import { spawn, exec } from 'child_process';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
@@ -113,78 +113,216 @@ const createWindow = async () => {
   new AppUpdater();
 };
 
-
-// const startPythonBackend = () => {
-//   // Path to your Python backend script
-//   const pythonScriptPath = path.join(__dirname, '../../backend/app.py');
-//   // Spawn the Python process. Change 'python' to your python executable if needed.
-//   const pyProc = spawn('python', [pythonScriptPath]);
-
-//   // Listen for data from stdout
-//   pyProc.stdout?.on('data', (data) => {
-//       console.log(`Python stdout: ${data.toString().trim()}`);
-//   });
-
-//   // Listen for errors from stderr
-//   pyProc.stderr?.on('data', (data) => {
-//       console.error(`Python error: ${data.toString().trim()}`);
-//   });
-
-//   // Handle process close
-//   pyProc.on('close', (code) => {
-//       console.log(`Python process exited with code ${code}`);
-//   });
-
-//   return pyProc;
-// };
 const runCommand = (command: string, args: string[], cwd: string) => {
   return spawn(command, args, { cwd });
 };
-const startDockerBackend = () => {
-  // Assuming docker-compose.yml is located at two levels up from the current file:
-  const projectRoot = path.join(__dirname, '../../');
-  
-  // Pull the latest backend image
-  const pullProcess = runCommand('docker-compose', ['pull', 'backend'], projectRoot);
 
-  pullProcess.stdout.on('data', (data) => {
-    console.log(`docker-compose pull stdout: ${data}`);
-  });
-
-  pullProcess.stderr.on('data', (data) => {
-    console.error(`docker-compose pull stderr: ${data}`);
-  });
-
-  pullProcess.on('close', (code) => {
-    if (code === 0) {
-      console.log('Successfully pulled backend image.');
-      // Now run the container in detached mode
-      const upProcess = runCommand('docker-compose', ['up', '-d', 'backend'], projectRoot);
-      upProcess.stdout.on('data', (data) => {
-        console.log(`docker-compose up stdout: ${data}`);
-      });
-      upProcess.stderr.on('data', (data) => {
-        console.error(`docker-compose up stderr: ${data}`);
-      });
-      upProcess.on('close', (code) => {
-        console.log(`docker-compose up exited with code ${code}`);
+/**
+ * Attempt to install Docker on macOS
+ */
+const installDockerOnMac = (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Docker Installation',
+        message: 'Docker is required and will be installed.',
+        detail: 'This may take several minutes and require your password. The application will continue after Docker is installed.',
+        buttons: ['Install Docker', 'Cancel'],
+        defaultId: 0,
+        cancelId: 1,
+      }).then((result) => {
+        if (result.response === 0) {
+          // User agreed to install Docker
+          log.info('Starting Docker installation...');
+          
+          // Create a temp script file to run the Docker install command
+          const tempScriptPath = path.join(app.getPath('temp'), 'install-docker.sh');
+          const scriptContent = `#!/bin/bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+`;
+          
+          // Write script to temp file
+          const fs = require('fs');
+          fs.writeFileSync(tempScriptPath, scriptContent);
+          fs.chmodSync(tempScriptPath, '755'); // Make executable
+          
+          // Run the script with admin privileges using osascript
+          const installProcess = spawn('osascript', [
+            '-e', 
+            `do shell script "${tempScriptPath}" with administrator privileges`
+          ]);
+          
+          installProcess.stdout?.on('data', (data) => {
+            log.info(`Docker install stdout: ${data}`);
+          });
+          
+          installProcess.stderr?.on('data', (data) => {
+            log.error(`Docker install stderr: ${data}`);
+          });
+          
+          installProcess.on('close', (code) => {
+            log.info(`Docker install exited with code ${code}`);
+            if (code === 0) {
+              dialog.showMessageBox(mainWindow!, {
+                type: 'info',
+                title: 'Docker Installed',
+                message: 'Docker was successfully installed.',
+                buttons: ['OK']
+              });
+              resolve(true);
+            } else {
+              dialog.showMessageBox(mainWindow!, {
+                type: 'error',
+                title: 'Docker Installation Failed',
+                message: 'Could not install Docker automatically.',
+                detail: 'Please install Docker Desktop manually and restart the application.',
+                buttons: ['OK']
+              });
+              resolve(false);
+            }
+            
+            // Clean up temp script
+            try {
+              fs.unlinkSync(tempScriptPath);
+            } catch (e) {
+              log.error('Failed to remove temp script:', e);
+            }
+          });
+        } else {
+          // User canceled installation
+          resolve(false);
+        }
       });
     } else {
-      console.error('Failed to pull backend image.');
+      resolve(false);
     }
   });
 };
 
+/**
+ * Check if Docker is installed and install if needed
+ */
+const checkDockerInstallation = async (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    // Check if docker is available
+    exec('docker --version', async (error) => {
+      if (error) {
+        log.error('Docker not found:', error);
+        
+        // Docker is not installed, attempt to install automatically
+        if (process.platform === 'darwin') {
+          const installed = await installDockerOnMac();
+          resolve(installed);
+        } else if (process.platform === 'win32') {
+          // Windows installation would be different
+          dialog.showMessageBox(mainWindow!, {
+            type: 'error',
+            title: 'Docker Required',
+            message: 'Docker is required to run the backend services.',
+            detail: 'Automatic installation is only supported on macOS. Please install Docker Desktop manually and restart the application.',
+            buttons: ['OK']
+          });
+          resolve(false);
+        } else {
+          // Linux installation would be different
+          dialog.showMessageBox(mainWindow!, {
+            type: 'error',
+            title: 'Docker Required',
+            message: 'Docker is required to run the backend services.',
+            detail: 'Automatic installation is only supported on macOS. Please install Docker Desktop manually and restart the application.',
+            buttons: ['OK']
+          });
+          resolve(false);
+        }
+      } else {
+        log.info('Docker is installed');
+        resolve(true);
+      }
+    });
+  });
+};
 
+const startDockerBackend = async () => {
+  const isDockerInstalled = await checkDockerInstallation();
+  if (!isDockerInstalled) {
+    log.warn('Docker not installed, skipping backend startup');
+    return;
+  }
 
+  // Assuming docker-compose.yml is located at project root
+  const projectRoot = path.join(__dirname, '../../');
+  
+  try {
+    // Pull the latest backend image
+    const pullProcess = runCommand('docker-compose', ['pull', 'backend'], projectRoot);
 
+    pullProcess.stdout?.on('data', (data) => {
+      log.info(`docker-compose pull stdout: ${data}`);
+    });
+
+    pullProcess.stderr?.on('data', (data) => {
+      log.info(`docker-compose pull stderr: ${data}`);
+    });
+
+    pullProcess.on('close', (code) => {
+      if (code === 0) {
+        log.info('Successfully pulled backend image.');
+        // Now run the container in detached mode
+        const upProcess = runCommand('docker-compose', ['up', '-d', 'backend'], projectRoot);
+        
+        upProcess.stdout?.on('data', (data) => {
+          log.info(`docker-compose up stdout: ${data}`);
+        });
+
+        upProcess.stderr?.on('data', (data) => {
+          log.info(`docker-compose up stderr: ${data}`);
+        });
+
+        upProcess.on('close', (upCode) => {
+          log.info(`docker-compose up exited with code ${upCode}`);
+          
+          if (upCode !== 0 && mainWindow) {
+            dialog.showMessageBox(mainWindow, {
+              type: 'error',
+              title: 'Backend Error',
+              message: 'Could not start the backend service.',
+              detail: 'There was an error starting the Docker container. Please check the logs for more information.',
+              buttons: ['OK'],
+            });
+          }
+        });
+      } else {
+        log.error('Failed to pull backend image.');
+        if (mainWindow) {
+          dialog.showMessageBox(mainWindow, {
+            type: 'error',
+            title: 'Backend Error',
+            message: 'Could not pull the backend image.',
+            detail: 'There was an error pulling the Docker image. Please check your internet connection and try again.',
+            buttons: ['OK'],
+          });
+        }
+      }
+    });
+  } catch (err) {
+    log.error('Error starting Docker backend:', err);
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Backend Error',
+        message: 'Could not start the backend service.',
+        detail: 'There was an unexpected error starting the Docker container.',
+        buttons: ['OK'],
+      });
+    }
+  }
+};
 
 /**
  * Add event listeners...
  */
-
-
-
 
 app.on('window-all-closed', () => {
   // Respect the OSX convention of having the application in memory even
@@ -197,7 +335,6 @@ app.on('window-all-closed', () => {
 app
   .whenReady()
   .then(() => {
-    //startPythonBackend();
     startDockerBackend();
     createWindow();
     app.on('activate', () => {
